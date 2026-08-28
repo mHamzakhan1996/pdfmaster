@@ -1,0 +1,198 @@
+// ==========================================================
+// DocPilot AI — Database Schema (PostgreSQL via Prisma)
+// Developed by Hamzah Khan
+// ==========================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -------------------- ENUMS --------------------
+
+enum PlanType {
+  FREE
+  PREMIUM
+  TEAM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+enum DocumentType {
+  PDF
+  WORD
+  EXCEL
+  POWERPOINT
+  IMAGE
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  FAILED
+  DELETED
+}
+
+enum JobType {
+  MERGE_PDF
+  SPLIT_PDF
+  COMPRESS_PDF
+  PDF_TO_WORD
+  WORD_TO_PDF
+  EXCEL_TO_PDF
+  PPT_TO_PDF
+  ADD_WATERMARK
+  REMOVE_WATERMARK
+  ROTATE_PAGES
+  EXTRACT_PAGES
+  CHAT_WITH_PDF
+  SUMMARIZE
+  TRANSLATE
+  REWRITE
+  EXTRACT_KEY_POINTS
+  GENERATE_REPORT
+  GENERATE_PRESENTATION
+  GENERATE_FAQS
+  GENERATE_QUIZ
+  EXTRACT_TABLES
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// -------------------- MODELS --------------------
+
+model User {
+  id              String   @id @default(uuid()) // mirrors Supabase auth.users.id
+  email           String   @unique
+  fullName        String?
+  avatarUrl       String?
+  authProvider    String   @default("email") // "email" | "google"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  plan            PlanType @default(FREE)
+  subscription    Subscription?
+
+  documents       Document[]
+  jobs            Job[]
+  chatSessions    ChatSession[]
+  usageRecords    UsageRecord[]
+
+  @@index([email])
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId               String             @unique
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  status               SubscriptionStatus @default(ACTIVE)
+  planType             PlanType           @default(FREE)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model Document {
+  id            String         @id @default(uuid())
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  fileName      String
+  fileType      DocumentType
+  mimeType      String
+  sizeBytes     Int
+  storagePath   String         // path/key inside bucket
+  storageUrl    String?        // signed/public URL
+  status        DocumentStatus @default(UPLOADED)
+  pageCount     Int?
+  extractedText String?        @db.Text
+  metadata      Json?
+  autoDeleteAt  DateTime?      // for "delete after processing" retention policy
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  jobs          Job[]
+  chatSessions  ChatSession[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Job {
+  id           String     @id @default(uuid())
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+  document     Document?  @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  documentId   String?
+  type         JobType
+  status       JobStatus  @default(QUEUED)
+  inputParams  Json?
+  resultUrl    String?
+  resultText   String?    @db.Text
+  errorMessage String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@index([userId])
+  @@index([status])
+}
+
+model ChatSession {
+  id         String    @id @default(uuid())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentId String
+  title      String    @default("New chat")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  messages   ChatMessage[]
+
+  @@index([userId])
+  @@index([documentId])
+}
+
+model ChatMessage {
+  id        String      @id @default(uuid())
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId String
+  role      String      // "user" | "assistant"
+  content   String      @db.Text
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+// Tracks daily usage for enforcing Free plan limits (5 docs/day, N AI requests/day)
+model UsageRecord {
+  id            String   @id @default(uuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  date          DateTime @default(now()) @db.Date
+  documentsUsed Int      @default(0)
+  aiRequestsUsed Int     @default(0)
+
+  @@unique([userId, date])
+  @@index([userId])
+}
